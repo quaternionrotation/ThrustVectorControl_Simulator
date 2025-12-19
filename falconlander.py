@@ -138,6 +138,7 @@ class Vehicle:
             # Collision with ground
                 if self.state == 3:
                      self.vy = 0
+                     self.vx = 0
 
                 self.x += self.vx * dt
                 self.y += self.vy * dt

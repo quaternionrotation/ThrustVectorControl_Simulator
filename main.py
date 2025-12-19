@@ -1,8 +1,10 @@
 import math
 import pygame
 import numpy
-import datetime
 import random
+import matplotlib.pyplot as plt
+import matplotlib.image as mpimg
+import pandas as pd
 
 pygame.init()
 WIDTH, HEIGHT = 960, 1000
@@ -13,25 +15,28 @@ pygame.font.init()
 font = pygame.font.SysFont('Arial', 20)
 
 # ------------------------------------------- CONFIG
+doVisualisation = True
+thrustCurve = 'TSP_E12.csv' # CSV file with time (s) and thrust (N) columns
+simLength = 7 # seconds
+loopRate = 200 # Hz
 g = 9.81
-dt = 1/60
-scaleFactor = 6
-MOI = 0.041 # for rads!
-InitialThrust = 20 # newtons
+scaleFactor = 14 # pixels per metre
+MOI = 0.0343 # Moment of Inertia Kg m^2, measured
+initialHeight = -10 # metres
+InitialThrust = 0 # newtons
 initialTVCAngle = 0
-initialAngle = 60
-COMMotorLength = 0.5 # metres
-P = 0.9
-I = 0.01
-D = 0.12
-actuationSpeed = 920 # in deg/s
-vehicleMass = 0.9 # Kg
+initialAngle = 20 # degrees
+COMMotorLength = 0.265 # metres
+actuationSpeed = 107 # in deg/s
+vehicleMass = 0.826 # Kg
 doLateral = True
 maxGimbal = 10
-InitialSetPoint = 0
+InitialSetPoint = 0 # degrees
 state = 1
-sK = 0.4
-sD = 2
+sK = 0
+sD = 0
+nominalThrust = 20 # For torque based controller
+detectDelay = 0 # Simulated delay in launch detect in seconds
 
 # -------------------------------------------
 
@@ -39,6 +44,7 @@ isA = False
 isD = False
 
 time = 0
+dt = 0
 
 rocketImg = pygame.image.load('rokit.png')
 rocketWidth = rocketImg.get_width()
@@ -48,9 +54,11 @@ flameImg = pygame.image.load("flame.png").convert_alpha()
 flameWidth = flameImg.get_width()
 flameHeight = flameImg.get_height()
 
+curve = pd.read_csv(thrustCurve) # Import thrust curve
+
 class Vehicle:
 
-    def __init__ (self, x, y, vx, vy, mass, a, w, angle, tvcangle, thrust):
+    def __init__ (self, x, y, vx, vy, mass, a, w, angle, tvcangle, thrust, _actuationSpeed, loopRate, p, i, d):
             self.x = x
             self.y = y
             self.vx = vx
@@ -65,20 +73,46 @@ class Vehicle:
             self.trail = []
             self.setPoint = InitialSetPoint
             self.prevx = 0
+            self.p = p
+            self.i = i
+            self.d = d
+            self.actuationSpeed = _actuationSpeed
+            self.loopRate = loopRate
+            self.lastPIDtime = 0
+            self.tvctarget = 0
+            self.ax = 0
+            self.ay = 0
+            self.launchDetected = False
+            self.measuredThrust = InitialThrust
+            self.launchDetectTime = 0
+
+            # For Graphing
+            self.angles = []
+            self.alts = []
+            self.times = [] 
+            self.thrusts = [] 
+            self.tvcangles = [] 
 
     def do_pid(self):
-          
-          deviation = self.angle - self.setPoint
-          self.integral += deviation * dt
-          tvctarget = P * deviation + D * self.w * 57.2958 + I * self.integral 
-          maxactuation = actuationSpeed * dt
-          self.tvcangle += numpy.clip(tvctarget - self.tvcangle, -maxactuation, maxactuation) # Accounts for actuator delay
+          pid_dt = time - self.lastPIDtime
+          if self.thrust/vehicleMass >= 4 and not self.launchDetected:
+            self.launchDetected = True
+            self.launchDetectTime = time + detectDelay # Account for delay
+          if self.launchDetected and time >= self.launchDetectTime: # Only run PID after launch detected and delay has passed
+            if pid_dt >= 1 / self.loopRate:
+                  deviation = self.angle - self.setPoint
+                  self.integral += deviation * pid_dt
+                  targettorque = self.p * deviation + self.d * self.w * 57.2958 + self.i * self.integral # Target Torque
+                  if self.measuredThrust != 0:
+                        self.tvctarget = numpy.clip(math.degrees(math.asin(numpy.clip(targettorque / (COMMotorLength * self.measuredThrust), -1, 1))), -maxGimbal, maxGimbal)
+                  else:
+                        self.tvctarget = 0
+                  self.lastPIDtime = time
+          maxactuation = self.actuationSpeed * dt
+          self.tvcangle += numpy.clip(self.tvctarget - self.tvcangle, -maxactuation, maxactuation) # Accounts for actuator delay
           self.tvcangle = numpy.clip(self.tvcangle, -maxGimbal, maxGimbal)
 
-          
           #derivative = (self.prevx - self.prevx) / dt
-          self.setPoint = sK * self.x + sD * self.vx
-          prevx = self.x
 
           #if self.y < -70:
                 #self.thrust = 0
@@ -86,20 +120,49 @@ class Vehicle:
     #def state_machine(self):
           #if state == 1:
                 
+    def actualThrust(self):
+      thrustval = 0
+      for i, row in curve.iterrows():
+            if row['time'] >= time:
+                  thrustval = row['thrust']
+                  break
+      self.thrust = thrustval
+
+    def measurethrust(self):
+            timeintoBurn = time - self.launchDetectTime - 0*detectDelay + 0.260
+
+            if self.launchDetected and time > self.launchDetectTime:
+                  if timeintoBurn < 0.535:
+                        self.measuredThrust = 88.364*timeintoBurn - 18.975
+                  elif timeintoBurn < 0.9:
+                        self.measuredThrust = -45.479*timeintoBurn + 52.631
+                  elif timeintoBurn < 3.5:
+                        self.measuredThrust = 12
+                  else:
+                        self.measuredThrust = 0
+
+                  if self.measuredThrust < 0:
+                        self.measuredThrust = 0
+                  
+            self.thrusts.append(self.measuredThrust)
 
     def update_position(self):
             
+
             # Lateral 
             if doLateral:
                 motorangle = self.tvcangle + self.angle
                 fx = fy = 0
                 fx -= self.thrust * math.sin(0.0174533 * motorangle)
                 fy -= self.thrust * math.cos(0.0174533 * motorangle)
-                fy += g * self.mass # Gravity
-                ax = fx / self.mass
-                ay = fy /  self.mass
-                self.vx += ax * dt 
-                self.vy += ay * dt
+                if (self.y <= -initialHeight):
+                  fy += g * self.mass # Gravity 
+                elif self.vy > 0:
+                  self.vy = 0
+                self.ax = fx / self.mass
+                self.ay = fy /  self.mass
+                self.vx += self.ax * dt 
+                self.vy += self.ay * dt
                 self.x += self.vx * dt
                 self.y += self.vy * dt
             else:
@@ -107,13 +170,23 @@ class Vehicle:
                   self.y = 0
 
             # Rotation
-            self.a = COMMotorLength * self.thrust * math.sin(self.tvcangle * 0.0174533) / MOI
+            self.a = (COMMotorLength * self.thrust * math.sin(self.tvcangle * 0.0174533)) / MOI 
             self.w -= self.a * dt 
             self.angle += self.w * dt * 57.2958 # Rads
+
+            self.angles.append(self.angle)
+            self.tvcangles.append(self.tvcangle)
+            self.alts.append(-initialHeight-self.y)
+            self.times.append(time)
 
             self.trail.append((int(self.x * scaleFactor + WIDTH / 2), int(self.y * scaleFactor + HEIGHT / 2)))
             #if len(self.trail) > 200:
                   #self.trail.pop(0)
+
+            if self.angle > 180:
+                  self.angle -= 360
+            elif self.angle < -180:
+                  self.angle += 360
 
     def draw(self, screen):
           rotatedRocket = pygame.transform.rotate(rocketImg, self.angle)
@@ -133,28 +206,62 @@ class Vehicle:
             screen.blit(rotatedFlame, rotatedFlameRect.topleft) # Flame first so rocket covers it
           screen.blit(rotatedRocket, rotatedRocketRect.topleft)
 
-          title = font.render('TVC SIM', False, (255, 255, 255))
+          title = font.render('TVC SIM', False, (0,0,0))
           screen.blit(title, (10,10))
-          title = font.render('Time: ' + str(time), False, (255, 255, 255))
+          title = font.render('Time: ' + str(time), False, (0,0,0))
           screen.blit(title, (10,40))
-          title = font.render('Height: ' + str(-self.y), False, (255, 255, 255))
+          title = font.render('Height: ' + str(-initialHeight-self.y), False, (0,0,0))
           screen.blit(title, (10,70))
-          title = font.render('Speed: ' + str(math.sqrt(self.vx ** 2 + self.vy **2)), False, (255, 255, 255))
+          title = font.render('Speed: ' + str(math.sqrt(self.vx ** 2 + self.vy **2)), False, (0,0,0))
           screen.blit(title, (10,100))
-          title = font.render('Angle: ' + str(self.angle), False, (255, 255, 255))
+          title = font.render('Angle: ' + str(self.angle), False, (0,0,0))
           screen.blit(title, (10,130))
-          title = font.render('Gimbal Angle: ' + str(self.tvcangle), False, (255, 255, 255))
+          title = font.render('Gimbal Angle: ' + str(self.tvcangle), False, (0,0,0))
           screen.blit(title, (10,160))
-          title = font.render('Thrust: ' + str(self.thrust), False, (255, 255, 255))
+          title = font.render('Thrust: ' + str(self.thrust), False, (0,0,0))
           screen.blit(title, (10,190))
-          title = font.render('LatDist: ' + str(self.x), False, (255, 255, 255))
+          title = font.render('LatDist: ' + str(self.x), False, (0,0,0))
           screen.blit(title, (10,220))
-          title = font.render('Setpoint: ' + str(self.setPoint), False, (255, 255, 255))
+          title = font.render('Setpoint: ' + str(self.setPoint), False, (0,0,0))
           screen.blit(title, (10,250))
+          title = font.render('Launch Detect Time: ' + str(self.launchDetectTime), False, (0,0,0))
+          screen.blit(title, (10,280))
+
+##############################################################
 
 vehicles = [
-    Vehicle(0, 50, 0, 0, vehicleMass, 0, 0, initialAngle, initialTVCAngle, InitialThrust)
+      Vehicle(0, -initialHeight, 0, 0, vehicleMass, 0, 0, initialAngle, initialTVCAngle, InitialThrust, actuationSpeed, loopRate, 0.035, 0.012, 0.009),
+      
 ]
+
+##############################################################
+
+plt.ion()
+fig, axs = plt.subplots(2, 2, figsize=(12, 10))  # Define figure and subplots
+lines = []
+lines2 = []
+lines3 = []
+lines4 = []
+
+for i, vehicle in enumerate(vehicles):
+    legend = str(vehicle.p) + ', ' + str(vehicle.i) + ', ' + str(vehicle.d) + ' (' + str(vehicle.actuationSpeed) + 'deg/s ' + str(vehicle.loopRate) + 'Hz)'
+    angleline, = axs[0, 0].plot(vehicle.times, vehicle.angles, label=legend)
+    lines.append(angleline)
+    thrustline, = axs[1, 0].plot(vehicle.times, vehicle.thrusts, label=legend)
+    lines2.append(thrustline)
+    altline, = axs[0, 1].plot(vehicle.times, vehicle.alts, label=legend)
+    lines3.append(altline)
+    tvcline, = axs[1, 1].plot(vehicle.times, vehicle.tvcangles, label=legend)
+    lines4.append(tvcline)
+
+axs[0, 0].set_ylabel('Angle / degrees')
+axs[1, 0].set_ylabel('Thrust / N')
+axs[0, 1].set_ylabel('Altitude / m')
+axs[1, 1].set_ylabel('TVC Angle / degrees')
+axs[0, 0].set_xlabel('Time / s')
+axs[0, 1].set_xlabel('Time / s')
+axs[1, 0].set_xlabel('Time / s')
+axs[1, 1].set_xlabel('Time / s')
 
 running = True
 while running:
@@ -164,8 +271,10 @@ while running:
             if event.type == pygame.KEYDOWN:
                   if event.key == pygame.K_r:
                         for vehicle in vehicles:
+                              time = 0
+                              dt = 0
                               vehicle.x = 0
-                              vehicle.y = 50
+                              vehicle.y = -initialHeight
                               vehicle.thrust = InitialThrust
                               vehicle.tvcangle = initialTVCAngle
                               vehicle.angle = random.randint(-160, 160)
@@ -177,17 +286,49 @@ while running:
                               vehicle.trail.clear()
                               vehicle.setPoint = InitialSetPoint
                               vehicle.prevx = 0
+                              vehicle.angles.clear()
+                              vehicle.times.clear()
+                              vehicle.alts.clear()
+                              vehicle.thrusts.clear()
+                              vehicle.tvcangles.clear()
 
-      screen.fill((0,0,20))
+      screen.fill((255,255,255))
+      # Vertical lines
+      for x in range(0, WIDTH, 10 * scaleFactor):
+            pygame.draw.line(screen, (200, 200, 200), (x, 0), (x, HEIGHT), 1)
 
-      for vehicle in vehicles:
+    # Horizontal lines
+      for y in range(0, HEIGHT, 10 * scaleFactor):
+            pygame.draw.line(screen, (200, 200, 200), (0, y), (WIDTH, y), 1)
+    # Floor line
+      pygame.draw.line(screen, (0, 0, 255), (0, HEIGHT / 2 - initialHeight * scaleFactor), (WIDTH, HEIGHT / 2 - initialHeight * scaleFactor), 3)
+
+      for i, vehicle in enumerate(vehicles):
             #vehicle.state_machine()
+            vehicle.actualThrust()
+            vehicle.measurethrust()
             vehicle.do_pid()
             vehicle.update_position()
             vehicle.draw(screen)
+            lines[i].set_data(vehicle.times, vehicle.angles)
+            lines2[i].set_data(vehicle.times, vehicle.thrusts)
+            lines3[i].set_data(vehicle.times, vehicle.alts)
+            lines4[i].set_data(vehicle.times, vehicle.tvcangles)
 
       time += dt
-      pygame.display.flip()
-      clock.tick(60)
+      if time > simLength:
+            for row in axs:
+                  for ax in row:
+                        ax.relim()
+                        ax.autoscale_view()
+                        ax.legend()
+                        ax.grid()
 
-pygame.quit()
+            plt.ioff()
+            plt.show()
+
+      if doVisualisation:  
+            dt = clock.tick() / 1000.0 # seconds to make real time
+            pygame.display.flip()
+      else:
+            dt = 0.01
