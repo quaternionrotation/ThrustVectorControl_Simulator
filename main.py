@@ -16,7 +16,7 @@ font = pygame.font.SysFont('Arial', 20)
 
 # ------------------------------------------- CONFIG
 doVisualisation = True
-thrustCurve = 'TSP_E12.csv' # CSV file with time (s) and thrust (N) columns
+thrustCurve = 'TSP_E12.csv'#'TSP_E12.csv' # CSV file with time (s) and thrust (N) columns
 simLength = 7 # seconds
 loopRate = 200 # Hz
 g = 9.81
@@ -30,12 +30,11 @@ COMMotorLength = 0.265 # metres
 actuationSpeed = 107 # in deg/s
 vehicleMass = 0.826 # Kg
 doLateral = True
-maxGimbal = 10
+maxGimbal = 8
 InitialSetPoint = 0 # degrees
 state = 1
 sK = 0
 sD = 0
-nominalThrust = 20 # For torque based controller
 detectDelay = 0 # Simulated delay in launch detect in seconds
 
 # -------------------------------------------
@@ -95,8 +94,9 @@ class Vehicle:
 
     def do_pid(self):
           pid_dt = time - self.lastPIDtime
-          if self.thrust/vehicleMass >= 4 and not self.launchDetected:
+          if (self.thrust/vehicleMass - g) >= 4 and not self.launchDetected:
             self.launchDetected = True
+            self.integral = 0
             self.launchDetectTime = time + detectDelay # Account for delay
           if self.launchDetected and time >= self.launchDetectTime: # Only run PID after launch detected and delay has passed
             if pid_dt >= 1 / self.loopRate:
@@ -144,7 +144,7 @@ class Vehicle:
                   if self.measuredThrust < 0:
                         self.measuredThrust = 0
                   
-            self.thrusts.append(self.measuredThrust)
+            self.thrusts.append(self.thrust)
 
     def update_position(self):
             
@@ -230,8 +230,7 @@ class Vehicle:
 ##############################################################
 
 vehicles = [
-      Vehicle(0, -initialHeight, 0, 0, vehicleMass, 0, 0, initialAngle, initialTVCAngle, InitialThrust, actuationSpeed, loopRate, 0.035, 0.012, 0.009),
-      
+      Vehicle(0, -initialHeight, 0, 0, vehicleMass, 0, 0, initialAngle, initialTVCAngle, InitialThrust, actuationSpeed, loopRate, 0.02, 0.007, 0.007),
 ]
 
 ##############################################################
@@ -328,7 +327,8 @@ while running:
             plt.show()
 
       if doVisualisation:  
-            dt = clock.tick() / 1000.0 # seconds to make real time
+            dt = 0.002
             pygame.display.flip()
+            
       else:
-            dt = 0.01
+            dt = 0.002

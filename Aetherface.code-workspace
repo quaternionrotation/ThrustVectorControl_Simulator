@@ -1,0 +1,48 @@
+{
+	"folders": [
+		{
+			"path": "../../../Aether/Aetherface"
+		},
+		{
+			"name": "AetherGNC",
+			"path": "../../../Aether/AetherGNC"
+		},
+		{
+			"name": "TVCServoTester",
+			"path": "../../../../Documents/PlatformIO/Projects/TVCServoTester"
+		},
+		{
+			"name": "ChaffControl",
+			"path": "../../../Aether/ChaffControl"
+		},
+		{
+			"name": "AthenaControl",
+			"path": "../../../Aether/AthenaControl"
+		},
+		{
+			"name": "STMTest",
+			"path": "../../../../Documents/PlatformIO/Projects/STMTest"
+		},
+		{
+			"name": "AthenaTest",
+			"path": "../../../../Documents/PlatformIO/Projects/AthenaTest"
+		},
+		{
+			"name": "AthenaCam",
+			"path": "../../../../Documents/PlatformIO/Projects/AthenaCam"
+		},
+		{
+			"name": "AthenaPad",
+			"path": "../../../../Documents/PlatformIO/Projects/AthenaPad"
+		},
+		{
+			"name": "WallE",
+			"path": "../../../../Documents/PlatformIO/Projects/WallE"
+		}
+	],
+	"settings": {
+		"files.associations": {
+			"cmath": "cpp"
+		}
+	}
+}
